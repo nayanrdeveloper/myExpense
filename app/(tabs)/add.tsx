@@ -1,14 +1,16 @@
 
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Category, getCategories } from '../../src/db/categories';
 import { addExpense, Expense, getExpenseById, getTodayExpenses, updateExpense } from '../../src/db/expenses';
 import { getDailyLimit, getSetting, getTrackingPaused, setSetting } from '../../src/db/settings';
 import { addTemplate, deleteTemplate, getTemplates, Template } from '../../src/db/templates';
 import { formatCurrency } from '../../src/utils/format';
+import { scanReceipt } from '../../src/utils/ReceiptScanner';
 
 const QUICK_AMOUNTS = [50, 100, 200, 500];
 
@@ -24,6 +26,76 @@ export default function AddExpenseScreen() {
     const [note, setNote] = useState('');
     const [location, setLocation] = useState('');
     const [isExcluded, setIsExcluded] = useState(false);
+    const [isScanning, setIsScanning] = useState(false);
+
+    const handleScanReceipt = async () => {
+        try {
+            const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+            if (status !== 'granted') {
+                Alert.alert('Permission needed', 'Please allow access to photos to scan receipts.');
+                return;
+            }
+
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                allowsEditing: true,
+                quality: 1,
+            });
+
+            if (!result.canceled && result.assets[0].uri) {
+                setIsScanning(true);
+                try {
+                    const scanData = await scanReceipt(result.assets[0].uri);
+
+                    if (scanData.amount) setAmount(scanData.amount.toString());
+
+                    // Auto-detected Category
+                    if (scanData.category) {
+                        // Verify it exists in our list, or set it
+                        // For now just set, the picker handles matching or we might need to add it if dynamic?
+                        // Assuming categories are static list from categories.ts mostly.
+                        setCategory(scanData.category);
+                    }
+
+                    if (scanData.merchant) {
+                        const merchant = scanData.merchant;
+                        setNote(prev => prev ? `${prev} - ${merchant}` : merchant);
+                    } else if (scanData.text.length > 0) {
+                        const firstLine = scanData.text.split('\n')[0];
+                        setNote(prev => prev ? `${prev} - ${firstLine}` : firstLine);
+                    }
+
+                    // Handle Items
+                    if (scanData.items && scanData.items.length > 0) {
+                        const mappedItems = scanData.items.map(item => ({
+                            name: item.name,
+                            amount: item.amount.toString(),
+                            unit: item.unit || ''
+                        }));
+                        setItems(mappedItems);
+                    }
+
+                    // Handle Tax
+                    if (scanData.tax) {
+                        setNote(prev => `${prev} (Tax: ${scanData.tax})`);
+                    }
+
+                    const itemsFound = scanData.items ? scanData.items.length : 0;
+                    Alert.alert(
+                        'AI Scan Complete! 🤖',
+                        `Amount: ${scanData.amount || '?'}\nCategory: ${scanData.category || 'Unknown'}\nItems: ${itemsFound}`
+                    );
+                } catch (e) {
+                    Alert.alert('Scan Failed', 'Could not read receipt.');
+                } finally {
+                    setIsScanning(false);
+                }
+            }
+        } catch (e) {
+            console.error(e);
+            setIsScanning(false);
+        }
+    };
 
     // Itemized Expenses
     const [items, setItems] = useState<{ name: string, amount: string, unit: string }[]>([]);
@@ -305,6 +377,13 @@ export default function AddExpenseScreen() {
                                 onChangeText={setAmount}
                                 autoFocus={!editId}
                             />
+                            {isScanning ? (
+                                <ActivityIndicator size="small" color="#4F46E5" style={{ marginLeft: 10 }} />
+                            ) : (
+                                <TouchableOpacity onPress={handleScanReceipt} style={styles.scanBtn}>
+                                    <Ionicons name="scan" size={24} color="#4F46E5" />
+                                </TouchableOpacity>
+                            )}
                         </View>
 
                         {/* Quick Amounts */}
@@ -565,6 +644,12 @@ const styles = StyleSheet.create({
         color: '#0F172A',
         minWidth: 100,
         textAlign: 'center',
+    },
+    scanBtn: {
+        padding: 12,
+        backgroundColor: '#E0E7FF',
+        borderRadius: 20,
+        marginLeft: 12,
     },
     quickAmounts: {
         flexDirection: 'row',
