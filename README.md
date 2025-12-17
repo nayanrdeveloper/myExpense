@@ -1,50 +1,117 @@
-# Welcome to your Expo app 👋
+# MyExpense 💰 - Intelligent Offline Finance Tracker
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+**MyExpense** is a **privacy-first, offline-only** personal finance application built with **React Native Expo**. It is designed for speed, security, and smart automation, featuring **On-Device AI** for receipt scanning and spending insights.
 
-## Get started
+---
 
-1. Install dependencies
+## 🚀 Key Features
 
-   ```bash
-   npm install
-   ```
+### 🧠 Offline AI & Automation
+- **AI Receipt Scanner**: Instantly scan bills to auto-fill Amount, Date, Merchant, Line Items, and Tax. Works 100% offline using On-Device OCR (ML Kit).
+- **Smart Category Prediction**: Automatically categorizes expenses based on merchant names and item keywords.
+- **Spending Patterns**: Detects weekend splurges, small daily leaks (coffee/snacks), and high-frequency categories.
 
-2. Start the app
+### 📊 Smart Financial Management
+- **Daily Safe Spend**: Calculates how much you can safely spend today to stay within your monthly budget.
+- **Zero-Spend Tracker**: Gamifies saving by tracking your streak of "No Spend" days.
+- **Subscription Tracker**: Manages recurring payments with auto-renewal logic and reminders.
+- **Bill Reminders**: Tracks upcoming bills with "Days Left" alerts.
+- **Monthly Budgeting**: Set daily and monthly spending limits with real-time alerts.
 
-   ```bash
-   npx expo start
-   ```
+### 📱 Premium User Experience
+- **Infinite Scroll**: Smooth performance for thousands of transactions.
+- **Dark/Light Mode**: Beautiful, modern UI with adaptive colors.
+- **Haptics & Animations**: Tactile feedback for interactions.
+- **Search & Filters**: Deep search through notes, locations, and amounts.
+- **Calendar View**: Visual grid of daily spending intensity.
 
-In the output, you'll find options to open the app in a
+---
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+## 📸 Screenshots
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+| Home Screen | Add Expense (AI Scan) | Insights & Reports |
+|:---:|:---:|:---:|
+| ![Home](assets/images/screenshot_home_placeholder.png) | ![Scan](assets/images/screenshot_scan_placeholder.png) | ![Reports](assets/images/screenshot_reports_placeholder.png) |
 
-## Get a fresh project
+*(Note: Screenshots to be added)*
 
-When you're ready, run:
+---
 
-```bash
-npm run reset-project
+## 🏗️ Architecture & Code Quality
+
+### Tech Stack
+- **Framework**: React Native (Expo SDK 52)
+- **Language**: TypeScript (Strict Mode)
+- **Database**: SQLite (Expo SQLite) - Local, relational data storage.
+- **Navigation**: Expo Router (File-based routing).
+- **AI/ML**: React Native ML Kit (Text Recognition).
+- **Styling**: `StyleSheet` with consistent design tokens.
+
+### Code Standards
+- **Modular Database Layer**: All DB operations are isolated in `src/db/` (e.g., `expenses.ts`, `settings.ts`). No raw SQL in UI components.
+- **Type Safety**: Full TypeScript coverage for all props, state, and database entities.
+- **Performance**: Heavy lists use `FlatList` with pagination (`LIMIT/OFFSET`). Expensive calculations are memoized.
+- **Offline-First**: No API calls or cloud dependencies. Data lives on the device.
+
+---
+
+## 📂 File Structure
+
+```
+myExpense/
+├── app/                    # Expo Router Screens
+│   ├── (tabs)/             # Main Tab Navigation (Home, Add, Reports, Settings)
+│   ├── _layout.tsx         # Root Layout & Theme Provider
+│   ├── calendar_view.tsx   # Calendar Modal
+│   └── manage_categories.tsx
+├── src/
+│   ├── db/                 # Database Layer (SQLite)
+│   │   ├── index.ts        # DB Initialization & Migrations
+│   │   ├── expenses.ts     # CRUD for Expenses
+│   │   └── reports.ts      # Aggregation Logic
+│   ├── utils/
+│   │   ├── ReceiptScanner.ts # AI/OCR Logic
+│   │   └── format.ts       # Currency/Date formatters
+│   └── components/         # Reusable UI Components (if broken out)
+├── assets/                 # Images & Fonts
+└── package.json            # Dependencies
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+---
 
-## Learn more
+## 📦 Key Packages
 
-To learn more about developing your project with Expo, look at the following resources:
+- `expo-sqlite`: High-performance local database.
+- `@react-native-ml-kit/text-recognition`: On-device OCR for receipts.
+- `expo-file-system`: For local backup/restore (upcoming).
+- `react-native-gifted-charts`: Beautiful, animated charts for reports.
+- `expo-haptics`: For tactile user feedback.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+---
 
-## Join the community
+## 💡 Use Cases
 
-Join our community of developers creating universal apps.
+1.  **Grocery Run**: Buy items -> Tap Scan -> Snap text -> App auto-fills "Walmart", Total $45.20, and categorizes as "Groceries".
+2.  **Monthly Budget**: Set a limit of $2000. App tells you "You can spend $65/day". If you spend $100 today, tomorrow's safe spend drops to $63.
+3.  **Subscription Audit**: Add Netflix ($15/mo). App shows it will renew in 4 days and includes it in your committed monthly costs.
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+---
+
+## 🚀 Getting Started
+
+1.  **Install Dependencies**:
+    ```bash
+    npm install
+    ```
+2.  **Run Development Server**:
+    ```bash
+    npx expo start
+    ```
+3.  **Build for Android (Native Features)**:
+    ```bash
+    eas build -p android --profile preview
+    ```
+
+---
+
+*Built with ❤️ by Nayan*
