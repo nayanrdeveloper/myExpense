@@ -18,164 +18,217 @@ export interface ScanResult {
     text: string;
 }
 
+interface TextBlock {
+    text: string;
+    frame: { x: number; y: number; width: number; height: number };
+}
+
+interface TextRow {
+    y: number;
+    height: number;
+    text: string;
+    elements: TextBlock[];
+}
+
 export const scanReceipt = async (imageUri: string): Promise<ScanResult> => {
     try {
         const result = await TextRecognition.recognize(imageUri);
-        const text = result.text;
-        const blocks = result.blocks;
 
-        const amount = parseAmount(text);
-        const tax = parseTax(text);
-        const date = parseDate(text);
-        const merchant = parseMerchant(blocks);
-        const items = parseItems(text);
-        const category = predictCategory(text, merchant, items);
+        // 1. Convert ML Kit structure to flat sortable blocks
+        const allElements: TextBlock[] = [];
+        for (const block of result.blocks) {
+            for (const line of block.lines) {
+                // We use lines as the atomic unit for clustering usually, 
+                // but sometimes lines are merged incorrectly across columns.
+                // Let's use the line but be aware of wide spacing.
+                if (line.frame) {
+                    const f = line.frame as any; // Cast to avoid strict type checks on varied Frame versions
+                    allElements.push({
+                        text: line.text,
+                        frame: {
+                            x: f.x ?? f.left ?? 0,
+                            y: f.y ?? f.top ?? 0,
+                            width: f.width ?? 0,
+                            height: f.height ?? 0
+                        }
+                    });
+                }
+            }
+        }
+
+        // 2. Spatial Clustering: Group text into Physical Rows
+        const rows = clusterTextIntoRows(allElements);
+
+        // 3. Analyze Rows
+        const merchant = analyzeMerchant(rows);
+        const { items, tax, total } = analyzeReceiptBody(rows);
+        const date = analyzeDate(result.text); // Dates are usually distinct enough to find via Regex globally
+        const category = predictCategory(result.text, merchant, items);
 
         return {
-            text,
-            amount,
+            amount: total,
             tax,
             date,
             merchant,
             items,
-            category
+            category,
+            text: result.text
         };
+
     } catch (e) {
-        console.error("OCR Error", e);
+        console.error("Spatial Scan Error", e);
         throw e;
     }
 };
 
-const parseAmount = (text: string): number | undefined => {
-    const lines = text.split('\n');
-    let maxAmount = 0;
-    const priceRegex = /[0-9]+[.,][0-9]{2}/g;
+/**
+ * Groups text elements that are roughly on the same Y-axis.
+ * Handles slight skew and font size variations.
+ */
+const clusterTextIntoRows = (elements: TextBlock[]): TextRow[] => {
+    // Sort by Y first
+    const sorted = [...elements].sort((a, b) => a.frame.y - b.frame.y);
+    const rows: TextRow[] = [];
+    const Y_TOLERANCE = 15; // pixels
 
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].toLowerCase();
-        if (line.includes('total') || line.includes('amount') || line.includes('payable') || line.includes('balance')) {
-            const matches = line.match(priceRegex);
-            if (matches) {
-                const val = parseFloat(matches[matches.length - 1].replace(/,/g, ''));
-                if (val > maxAmount) maxAmount = val;
-            }
-        }
-    }
+    for (const el of sorted) {
+        // Find a matching row
+        const match = rows.find(r =>
+            Math.abs(r.y - el.frame.y) < Y_TOLERANCE ||
+            Math.abs((r.y + r.height / 2) - (el.frame.y + el.frame.height / 2)) < Y_TOLERANCE
+        );
 
-    if (maxAmount > 0) return maxAmount;
-
-    const allMatches = text.match(priceRegex);
-    if (allMatches) {
-        const values = allMatches
-            .map(m => parseFloat(m.replace(/,/g, '')))
-            .filter(v => v < 1000000);
-        if (values.length > 0) {
-            return Math.max(...values);
-        }
-    }
-    return undefined;
-};
-
-const parseTax = (text: string): number | undefined => {
-    const lines = text.split('\n');
-    const taxRegex = /(?:tax|gst|vat|hst)\s*:?\s*(\d+[.,]\d{2})/i;
-
-    for (const line of lines) {
-        const match = line.match(taxRegex);
         if (match) {
-            return parseFloat(match[1].replace(/,/g, ''));
+            match.elements.push(el);
+            // Sort elements in row by X
+            match.elements.sort((a, b) => a.frame.x - b.frame.x);
+            // Re-calculate combined row text
+            match.text = match.elements.map(e => e.text).join(' ');
+            // Expand Row Height/Y coverage
+            // (Simulate simple merge logic)
+        } else {
+            rows.push({
+                y: el.frame.y,
+                height: el.frame.height,
+                text: el.text,
+                elements: [el]
+            });
         }
     }
-    return undefined;
+    return rows;
 };
 
-const parseDate = (text: string): string | undefined => {
-    const isoDate = /\b\d{4}-\d{2}-\d{2}\b/;
-    const isoMatch = text.match(isoDate);
-    if (isoMatch) return isoMatch[0];
-
-    const dmyDate = /\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b/;
-    const dmyMatch = text.match(dmyDate);
-    if (dmyMatch) {
-        return `${dmyMatch[3]}-${dmyMatch[2].padStart(2, '0')}-${dmyMatch[1].padStart(2, '0')}`;
+const analyzeMerchant = (rows: TextRow[]): string | undefined => {
+    // Merchant is usually in the top 5 rows, largest text, centered (heuristic)
+    // For now, take the first row that doesn't look like a phone number or date
+    for (let i = 0; i < Math.min(6, rows.length); i++) {
+        const txt = rows[i].text.trim();
+        if (txt.length < 4) continue;
+        if (/^\d+$/.test(txt)) continue; // Skip pure numbers
+        if (/(date|phone|gst|tax|inv)/i.test(txt)) continue; // Metadata lines
+        return txt;
     }
     return undefined;
 };
 
-const parseItems = (text: string): ScannedItem[] => {
-    const lines = text.split('\n');
+const analyzeReceiptBody = (rows: TextRow[]): { items: ScannedItem[], tax?: number, total?: number } => {
     const items: ScannedItem[] = [];
-    const priceRegex = /(\d+[.,]\d{2})$/;
+    let grandTotal: number | undefined;
+    let totalTax: number | undefined;
 
-    let startIndex = 0;
-    let endIndex = lines.length;
+    const priceRegex = /(\d{1,3}(?:,\d{3})*\.\d{2})|(\d+\.\d{2})|(\d+)/;
 
-    const lowerLines = lines.map(l => l.toLowerCase());
-    const totalIndex = lowerLines.findIndex(l => l.includes('total') || l.includes('subtotal') || l.includes('amount'));
-    if (totalIndex > -1) endIndex = totalIndex;
+    // Iterate rows to find items
+    // Heuristic: Item rows usually have [Name] ... [Price]
 
-    for (let i = startIndex; i < endIndex; i++) {
-        const line = lines[i].trim();
-        if (line.length < 5 || line.match(/^\d+$/) || line.match(/^\d{2}\/\d{2}\/\d{4}$/)) continue;
-        if (line.toLowerCase().includes('tax') || line.toLowerCase().includes('cash') || line.toLowerCase().includes('change')) continue;
+    for (const row of rows) {
+        const text = row.text;
+        const lower = text.toLowerCase();
 
-        const priceMatch = line.match(priceRegex);
-        if (priceMatch) {
-            const price = parseFloat(priceMatch[1].replace(/,/g, ''));
-            let namePart = line.substring(0, line.length - priceMatch[0].length).trim();
-
-            // Advanced Qty/Unit Logic
-            let qty = 1;
-            let unit = '';
-
-            // Pattern: "2 x 50.00" (Price per unit line? skip)
-            if (namePart.match(/x\s*\d+[.,]\d{2}/)) continue;
-
-            // Pattern: "2 x Item" or "2 Item"
-            const qtyMatch = namePart.match(/^(\d+)\s*([xX]|pcs)?\s*/);
-            if (qtyMatch) {
-                const q = parseInt(qtyMatch[1], 10);
-                if (q < 100) { // Sanity check
-                    qty = q;
-                    namePart = namePart.substring(qtyMatch[0].length).trim();
+        // Check for Total
+        if (lower.includes('total') || lower.includes('payable') || lower.includes('net amount')) {
+            const matches = text.match(/[\d,]+\.\d{2}/g);
+            if (matches) {
+                const vals = matches.map(m => parseFloat(m.replace(/,/g, '')));
+                const maxVal = Math.max(...vals);
+                if (!grandTotal || maxVal > grandTotal) {
+                    grandTotal = maxVal;
                 }
             }
+            continue; // Don't process total line as item
+        }
 
-            // Unit Detection (Offline Dictionary)
-            const unitPatterns = [
-                { u: 'kg', p: /\b(\d*\.?\d+)\s*kg\b/i },
-                { u: 'g', p: /\b(\d+)\s*g\b/i },
-                { u: 'L', p: /\b(\d*\.?\d+)\s*(l|ltr|liter)\b/i },
-                { u: 'ml', p: /\b(\d+)\s*ml\b/i },
-                { u: 'pcs', p: /\b(\d+)\s*(pcs|pc)\b/i },
-                { u: 'box', p: /\bbox\b/i },
-                { u: 'pkt', p: /\b(pkt|packet)\b/i },
-            ];
+        // Check for Tax
+        if (lower.includes('tax') || lower.includes('gst') || lower.includes('vat')) {
+            const matches = text.match(/[\d,]+\.\d{2}/);
+            if (matches) {
+                totalTax = parseFloat(matches[0].replace(/,/g, ''));
+            }
+            continue;
+        }
 
-            for (const up of unitPatterns) {
-                const m = namePart.match(up.p);
-                if (m) {
-                    unit = up.u;
-                    break;
+        // Potential Item Row
+        // Must end with a number (Price)
+        // Must have text before it
+
+        // Split by wide spaces if possible, or use the elements
+        const elements = row.elements;
+        if (elements.length >= 2) {
+            // Check right-most element for price
+            const lastEl = elements[elements.length - 1];
+            const cleanPrice = lastEl.text.replace(/[^0-9.]/g, '');
+
+            if (cleanPrice && cleanPrice.includes('.')) {
+                const price = parseFloat(cleanPrice);
+                if (!isNaN(price) && price > 0 && price < 100000) {
+                    // Valid potential price
+
+                    // Everything to the left is the Name + Quantity
+                    const nameParts = elements.slice(0, elements.length - 1);
+                    let nameText = nameParts.map(e => e.text).join(' ');
+
+                    // Extract Quantity / Unit if present in Name
+                    // Pattern: "2 x Burger" or "Sugar 1kg"
+
+                    let qty = 1;
+                    let unit = '';
+
+                    // Qty Pattern: "2 x", "2pcs"
+                    const qtyMatch = nameText.match(/^(\d+)\s*([xX]|pcs|pc)\b/i);
+                    if (qtyMatch) {
+                        qty = parseInt(qtyMatch[1]);
+                        nameText = nameText.replace(qtyMatch[0], '').trim();
+                    }
+
+                    // Unit Pattern
+                    const unitMatch = nameText.match(/\b(\d*\.?\d+)\s*(kg|g|gm|l|ml|ltr|box|pkt)\b/i);
+                    if (unitMatch) {
+                        // If number is present in unit match (e.g. 500g), that's the size, not necessarily qty
+                        // But for expense tracking "500g Sugar" is a good name.
+                        // Let's extract the unit for metadata but keep name intact mostly
+                        unit = unitMatch[2];
+                    }
+
+                    if (nameText.length > 2 && !nameText.match(/subtotal|discount/i)) {
+                        items.push({
+                            name: nameText,
+                            amount: price,
+                            qty,
+                            unit
+                        });
+                    }
                 }
             }
-
-            items.push({ name: namePart, amount: price, qty, unit });
         }
     }
-    return items;
+
+    return { items, total: grandTotal, tax: totalTax };
 };
 
-const parseMerchant = (blocks: any[]): string | undefined => {
-    if (!blocks || blocks.length === 0) return undefined;
-
-    for (let i = 0; i < Math.min(5, blocks.length); i++) {
-        const txt = blocks[i].text.trim();
-        if (txt.length > 3 && !txt.match(/\d/) && !txt.includes('Total') && !txt.includes('Date')) {
-            if (['receipt', 'tax invoice', 'bill', 'welcome'].includes(txt.toLowerCase())) continue;
-            return txt;
-        }
-    }
+const analyzeDate = (text: string): string | undefined => {
+    // Regex for various date formats
+    const matches = text.match(/(\d{1,2}[-./]\d{1,2}[-./]\d{2,4})/);
+    if (matches) return matches[0];
     return undefined;
 };
 
@@ -183,13 +236,12 @@ const predictCategory = (text: string, merchant: string | undefined, items: Scan
     const fullText = (text + " " + (merchant || "") + " " + items.map(i => i.name).join(" ")).toLowerCase();
 
     const categories: Record<string, string[]> = {
-        'Groceries': ['market', 'mart', 'fresh', 'food', 'bakery', 'dairy', 'milk', 'egg', 'veg', 'fruit', 'grocery', 'supermarket'],
-        'Food': ['restaurant', 'cafe', 'coffee', 'burger', 'pizza', 'kitchen', 'dining', 'bistro', 'bar', 'tea', 'snack'],
+        'Groceries': ['market', 'mart', 'fresh', 'food', 'bakery', 'dairy', 'milk', 'egg', 'veg', 'fruit', 'grocery', 'supermarket', 'kirana'],
+        'Food': ['restaurant', 'cafe', 'coffee', 'burger', 'pizza', 'kitchen', 'dining', 'bistro', 'bar', 'tea', 'snack', 'hotel'],
         'Travel': ['fuel', 'petrol', 'gas', 'station', 'oil', 'uber', 'lyft', 'ola', 'taxi', 'cab', 'trip', 'airline', 'flight', 'parking', 'toll'],
         'Medical': ['pharmacy', 'chemist', 'hospital', 'clinic', 'doctor', 'med', 'health', 'tablet', 'pill'],
-        'Shopping': ['fashion', 'clothing', 'apparel', 'shoe', 'wear', 'retail', 'mall', 'amazon', 'flipkart', 'store'],
-        'Utilities': ['electric', 'power', 'water', 'bill', 'recharge', 'wifi', 'internet', 'broadband'],
-        'Entertainment': ['movie', 'cinema', 'theatre', 'netflix', 'game', 'play', 'show'],
+        'Shopping': ['fashion', 'clothing', 'apparel', 'shoe', 'wear', 'retail', 'mall', 'amazon', 'flipkart', 'store', 'myntra'],
+        'Utilities': ['electric', 'power', 'water', 'bill', 'recharge', 'wifi', 'internet', 'broadband', 'airtel', 'jio', 'vodafone'],
     };
 
     for (const [cat, keywords] of Object.entries(categories)) {
@@ -197,6 +249,6 @@ const predictCategory = (text: string, merchant: string | undefined, items: Scan
             if (fullText.includes(word)) return cat;
         }
     }
-
     return undefined;
 };
+

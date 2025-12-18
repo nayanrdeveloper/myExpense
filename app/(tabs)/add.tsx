@@ -4,6 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import DocumentScanner from 'react-native-document-scanner-plugin';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Category, getCategories } from '../../src/db/categories';
 import { addExpense, Expense, getExpenseById, getTodayExpenses, updateExpense } from '../../src/db/expenses';
@@ -29,70 +30,93 @@ export default function AddExpenseScreen() {
     const [isScanning, setIsScanning] = useState(false);
 
     const handleScanReceipt = async () => {
+        setIsScanning(true);
         try {
-            const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-            if (status !== 'granted') {
-                Alert.alert('Permission needed', 'Please allow access to photos to scan receipts.');
-                return;
-            }
-
-            const result = await ImagePicker.launchImageLibraryAsync({
-                mediaTypes: ImagePicker.MediaTypeOptions.Images,
-                allowsEditing: true,
-                quality: 1,
+            // Document Scanner (Camera + Auto Crop)
+            const { scannedImages } = await DocumentScanner.scanDocument({
+                maxNumDocuments: 1
             });
 
-            if (!result.canceled && result.assets[0].uri) {
-                setIsScanning(true);
-                try {
-                    const scanData = await scanReceipt(result.assets[0].uri);
-
-                    if (scanData.amount) setAmount(scanData.amount.toString());
-
-                    // Auto-detected Category
-                    if (scanData.category) {
-                        // Verify it exists in our list, or set it
-                        // For now just set, the picker handles matching or we might need to add it if dynamic?
-                        // Assuming categories are static list from categories.ts mostly.
-                        setCategory(scanData.category);
-                    }
-
-                    if (scanData.merchant) {
-                        const merchant = scanData.merchant;
-                        setNote(prev => prev ? `${prev} - ${merchant}` : merchant);
-                    } else if (scanData.text.length > 0) {
-                        const firstLine = scanData.text.split('\n')[0];
-                        setNote(prev => prev ? `${prev} - ${firstLine}` : firstLine);
-                    }
-
-                    // Handle Items
-                    if (scanData.items && scanData.items.length > 0) {
-                        const mappedItems = scanData.items.map(item => ({
-                            name: item.name,
-                            amount: item.amount.toString(),
-                            unit: item.unit || ''
-                        }));
-                        setItems(mappedItems);
-                    }
-
-                    // Handle Tax
-                    if (scanData.tax) {
-                        setNote(prev => `${prev} (Tax: ${scanData.tax})`);
-                    }
-
-                    const itemsFound = scanData.items ? scanData.items.length : 0;
-                    Alert.alert(
-                        'AI Scan Complete! 🤖',
-                        `Amount: ${scanData.amount || '?'}\nCategory: ${scanData.category || 'Unknown'}\nItems: ${itemsFound}`
-                    );
-                } catch (e) {
-                    Alert.alert('Scan Failed', 'Could not read receipt.');
-                } finally {
-                    setIsScanning(false);
-                }
+            if (scannedImages && scannedImages.length > 0) {
+                const uri = scannedImages[0];
+                processScannedImage(uri);
+            } else {
+                setIsScanning(false);
             }
         } catch (e) {
-            console.error(e);
+            // Fallback for Simulator or if Scanner fails
+            console.log("Scanner failed, trying picker", e);
+            try {
+                const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                if (status !== 'granted') {
+                    Alert.alert('Permission needed', 'Please allow access to photos.');
+                    setIsScanning(false);
+                    return;
+                }
+
+                const result = await ImagePicker.launchImageLibraryAsync({
+                    mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                    allowsEditing: true,
+                    quality: 1,
+                });
+
+                if (!result.canceled && result.assets[0].uri) {
+                    processScannedImage(result.assets[0].uri);
+                } else {
+                    setIsScanning(false);
+                }
+            } catch (err) {
+                console.error(err);
+                setIsScanning(false);
+                Alert.alert('Error', 'Could not scan or pick image.');
+            }
+        }
+    };
+
+    const processScannedImage = async (uri: string) => {
+        try {
+            const scanData = await scanReceipt(uri);
+
+            if (scanData.amount) setAmount(scanData.amount.toString());
+
+            // Auto-detected Category
+            if (scanData.category) {
+                setCategory(scanData.category);
+            }
+
+            if (scanData.merchant) {
+                const merchant = scanData.merchant;
+                setNote(prev => prev ? `${prev} - ${merchant}` : merchant);
+            } else if (scanData.text.length > 0) {
+                // const firstLine = scanData.text.split('\n')[0];
+                // setNote(prev => prev ? `${prev} - ${firstLine}` : firstLine);
+            }
+
+            // Handle Items
+            if (scanData.items && scanData.items.length > 0) {
+                const mappedItems = scanData.items.map(item => ({
+                    name: item.qty && item.qty > 1 ? `(${item.qty}x) ${item.name}` : item.name,
+                    amount: item.amount.toString(),
+                    unit: item.unit || ''
+                }));
+                // Combine with existing items if any?? For now overwrite or append?
+                // setRequests overwrite usually for a fresh scan
+                setItems(mappedItems);
+            }
+
+            // Handle Tax
+            if (scanData.tax) {
+                setNote(prev => `${prev} (Tax: ${scanData.tax})`);
+            }
+
+            const itemsFound = scanData.items ? scanData.items.length : 0;
+            Alert.alert(
+                'AI Scan Complete! 🤖',
+                `Amount: ${scanData.amount || '?'}\nCategory: ${scanData.category || 'Unknown'}\nItems: ${itemsFound}`
+            );
+        } catch (e) {
+            Alert.alert('Scan Failed', 'Could not read receipt.');
+        } finally {
             setIsScanning(false);
         }
     };
