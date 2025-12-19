@@ -86,10 +86,15 @@ export default function AddExpenseScreen() {
 
             if (scanData.merchant) {
                 const merchant = scanData.merchant;
-                setNote(prev => prev ? `${prev} - ${merchant}` : merchant);
-            } else if (scanData.text.length > 0) {
-                // const firstLine = scanData.text.split('\n')[0];
-                // setNote(prev => prev ? `${prev} - ${firstLine}` : firstLine);
+                setNote(merchant);
+            }
+
+            // Append full text as requested to avoid storing images
+            if (scanData.text) {
+                setNote(prev => {
+                    const separator = prev ? '\n\n--- OCR Text ---\n' : '';
+                    return `${prev}${separator}${scanData.text}`;
+                });
             }
 
             // Handle Items
