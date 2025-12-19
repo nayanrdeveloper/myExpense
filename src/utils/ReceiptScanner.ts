@@ -16,6 +16,7 @@ export interface ScanResult {
     items?: ScannedItem[];
     category?: string;
     text: string;
+    formattedText?: string;
 }
 
 interface TextBlock {
@@ -65,6 +66,9 @@ export const scanReceipt = async (imageUri: string): Promise<ScanResult> => {
         const date = analyzeDate(result.text); // Dates are usually distinct enough to find via Regex globally
         const category = predictCategory(result.text, merchant, items);
 
+        // Construct Formatted Text from Spatial Rows (Line by Line)
+        const formattedText = rows.map(r => r.text).join('\n');
+
         return {
             amount: total,
             tax,
@@ -72,7 +76,8 @@ export const scanReceipt = async (imageUri: string): Promise<ScanResult> => {
             merchant,
             items,
             category,
-            text: result.text
+            text: result.text,
+            formattedText
         };
 
     } catch (e) {

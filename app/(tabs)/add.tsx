@@ -89,11 +89,14 @@ export default function AddExpenseScreen() {
                 setNote(merchant);
             }
 
-            // Append full text as requested to avoid storing images
-            if (scanData.text) {
+            // Append full text - PREFER the Spatially Formatted text
+            // This ensures lines appear as distinct rows (Visual Layout)
+            const textToUse = scanData.formattedText || scanData.text;
+
+            if (textToUse) {
                 setNote(prev => {
-                    const separator = prev ? '\n\n--- OCR Text ---\n' : '';
-                    return `${prev}${separator}${scanData.text}`;
+                    const separator = prev ? '\n\n--- Receipt Details ---\n' : '';
+                    return `${prev}${separator}${textToUse}`;
                 });
             }
 
@@ -470,11 +473,13 @@ export default function AddExpenseScreen() {
                         {/* Note */}
                         <Text style={styles.sectionLabel}>Note</Text>
                         <TextInput
-                            style={styles.noteInput}
+                            style={[styles.noteInput, { textAlignVertical: 'top', minHeight: 100 }]}
                             placeholder="Add a note... (optional)"
                             placeholderTextColor="#94A3B8"
                             value={note}
                             onChangeText={setNote}
+                            multiline={true}
+                            numberOfLines={4}
                         />
 
                         {/* Location Input (New) */}
